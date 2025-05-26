@@ -233,6 +233,10 @@ def prepare(
     if history is None and pixel_values is not None and "<image>" not in question:
         question = "<image>\n" + question
 
+    cur_pixel = pixel_values[3:]
+
+    pixel_values = pixel_values[:3]
+
     if num_patches_list is None:
         num_patches_list = [1] * pixel_values.shape[0] if pixel_values is not None else []
     assert pixel_values is None or len(pixel_values) == sum(num_patches_list)
@@ -263,6 +267,7 @@ def prepare(
 
     return (
         pixel_values,
+        cur_pixel,
         model_inputs["input_ids"],
         model_inputs["attention_mask"],
     )
@@ -417,6 +422,7 @@ class EagleProcessor:
 
         (
             pixel_values,
+            cur_pixel,
             input_ids,
             attention_mask,
         ) = prepare(
@@ -429,6 +435,7 @@ class EagleProcessor:
         )
         data = {
             "pixel_values": pixel_values,
+            "cur_pixel_values": cur_pixel,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
@@ -440,14 +447,17 @@ class EagleProcessor:
 
     def collate_fn(self, all_examples):
         pixel_values_list = [ex["pixel_values"] for ex in all_examples]
+        cur_pixel_values_list = [ex["cur_pixel_values"] for ex in all_examples]
         input_ids_list = [ex["input_ids"] for ex in all_examples]
         attention_mask_list = [ex["attention_mask"] for ex in all_examples]
 
         assert isinstance(pixel_values_list, List)
+        assert isinstance(cur_pixel_values_list, List)
         assert isinstance(input_ids_list, List)
         assert isinstance(attention_mask_list, List)
 
         pixel_values = torch.cat(pixel_values_list, dim=0)
+        cur_pixel_values = torch.cat(cur_pixel_values_list, dim=0)
 
         tokenized_batch = {
             "input_ids": [ip[0] for ip in input_ids_list],
@@ -465,6 +475,7 @@ class EagleProcessor:
         attention_mask = padded_batch.attention_mask
         data = {
             "pixel_values": pixel_values,
+            "cur_pixel_values": cur_pixel_values,
             "input_ids": input_ids,
             "attention_mask": attention_mask,
         }

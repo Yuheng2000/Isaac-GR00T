@@ -26,7 +26,7 @@ from gr00t.data.transform.base import InvertibleModalityTransform
 from gr00t.model.backbone.eagle2_hg_model.inference_eagle_repo import EagleProcessor
 
 DEFAULT_SYSTEM_MESSAGE = "You are a helpful assistant."
-EAGLE_KEYS = ["pixel_values", "input_ids", "attention_mask"]
+EAGLE_KEYS = ["pixel_values", "input_ids", "attention_mask", "cur_pixel_values"]
 
 
 def collate_gr00t(features: List[dict], processor) -> dict:
@@ -96,6 +96,8 @@ class GR00TTransform(InvertibleModalityTransform):
 
     max_length: int = 512
     embodiment_tag: EmbodimentTag | None = None
+    use_future: bool = False
+    use_asyn: bool = False
 
     def set_metadata(self, dataset_metadata: DatasetMetadata):
         """Set the metadata for the transform."""
@@ -148,10 +150,15 @@ class GR00TTransform(InvertibleModalityTransform):
                 video: [T, V, H, W, C]
         """
         images = batch["images"]
-        assert images.shape[0] == 1, "double check formatting when doing multi-time step"
+        if not self.use_future and not self.use_asyn:
+            assert images.shape[0] == 1, "double check formatting when doing multi-time step"
+        else:
+            assert images.shape[0] == 2
         # Remove the singleton time dimension.
-        images = images[0]
+        images = images.reshape(images.shape[0] * images.shape[1], *images.shape[2:])
         images = [{"np_array": images[idx]} for idx in range(len(images))]
+        # if self.use_future or self.use_asyn:
+
         if "language" in batch:
             lang = batch["language"]
             if isinstance(lang, list):
@@ -202,18 +209,28 @@ class GR00TTransform(InvertibleModalityTransform):
             n_state_tokens = self.state_horizon
             return state, state_mask, n_state_tokens
 
-        state = data["state"]
-        assert state.shape[0] == self.state_horizon, f"{state.shape=}, {self.state_horizon=}"
+        state = data["state"][:self.state_horizon, :]
+        if self.use_future:
+            future_state = data["state"][self.state_horizon:, :]
+        else:
+            future_state = None
+        # assert state.shape[0] == self.state_horizon, f"{state.shape=}, {self.state_horizon=}"
 
         n_state_dims = state.shape[-1]
 
         # Instead of asserting, just take the first max_state_dim dimensions if needed
         if n_state_dims > self.max_state_dim:
             state = state[:, : self.max_state_dim]
+            if self.use_future:
+                # If we have future state, we need to truncate it as well
+                future_state = future_state[:, : self.max_state_dim]
             n_state_dims = self.max_state_dim
         else:
             # Pad up to max_state_dim if smaller
             state = np.pad(state, ((0, 0), (0, self.max_state_dim - n_state_dims)), "constant")
+            if self.use_future:
+                # Pad future state as well
+                future_state = np.pad(future_state, ((0, 0), (0, self.max_state_dim - n_state_dims)), "constant")
 
         # Create mask for real state dims
         state_mask = np.zeros_like(state).astype(bool)
@@ -221,7 +238,8 @@ class GR00TTransform(InvertibleModalityTransform):
 
         # We only have 1 "proprio" token to represent the entire state
         n_state_tokens = state.shape[0]
-        return state, state_mask, n_state_tokens
+
+        return state, state_mask, n_state_tokens, future_state
 
     def _prepare_action(self, data: dict):
         """
@@ -233,8 +251,12 @@ class GR00TTransform(InvertibleModalityTransform):
             n_action_tokens = self.action_horizon
             return actions, actions_mask, n_action_tokens
 
-        actions = data["action"]
-        assert actions.shape[0] == self.action_horizon, f"{actions.shape=}, {self.action_horizon=}"
+        actions = data["action"][:self.action_horizon, :]
+        if self.use_future:
+            future_actions = data["action"][self.action_horizon:, :]
+        else:
+            future_actions = None
+        # assert actions.shape[0] == self.action_horizon, f"{actions.shape=}, {self.action_horizon=}"
 
         n_action_tokens = actions.shape[0]  # T
         n_action_dims = actions.shape[1]
@@ -245,12 +267,15 @@ class GR00TTransform(InvertibleModalityTransform):
 
         # Pad the channel dimension
         actions = np.pad(actions, ((0, 0), (0, self.max_action_dim - n_action_dims)), "constant")
+        if self.use_future:
+            # Pad the future actions
+            future_actions = np.pad(future_actions, ((0, 0), (0, self.max_action_dim - n_action_dims)), "constant")
 
         # Create mask: [T, max_action_dim]
         actions_mask = np.zeros((n_action_tokens, self.max_action_dim), dtype=bool)
         actions_mask[:, :n_action_dims] = True
 
-        return actions, actions_mask, n_action_tokens
+        return actions, actions_mask, n_action_tokens, future_actions
 
     def apply_single(self, data: dict) -> dict:
         transformed_data = {}
@@ -264,7 +289,7 @@ class GR00TTransform(InvertibleModalityTransform):
         vlm_outputs = self._apply_gr00t_processing(vlm_batch)
 
         # 2) Prepare state
-        state, state_mask, _ = self._prepare_state(data)
+        state, state_mask, _, future_state = self._prepare_state(data)
         transformed_data["state"] = state
         transformed_data["state_mask"] = state_mask
 
@@ -273,9 +298,12 @@ class GR00TTransform(InvertibleModalityTransform):
             transformed_data["segmentation_target"] = np.zeros((2,))
             transformed_data["segmentation_target_mask"] = np.zeros((1,))
             transformed_data["has_real_action"] = np.ones((), dtype=bool)
-            actions, actions_mask, _ = self._prepare_action(data)
+            actions, actions_mask, _, future_actions = self._prepare_action(data)
             transformed_data["action"] = actions
             transformed_data["action_mask"] = actions_mask
+            if self.use_future:
+                transformed_data["future_state"] = future_state
+                transformed_data['future_action'] = future_actions
 
         for k, v in vlm_outputs.items():
             assert k not in transformed_data, f"Key {k} already exists in transformed_data."

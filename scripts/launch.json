@@ -1,0 +1,41 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Fine-tune GR00T",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "/home/jiyuheng/Isaac-GR00T/scripts/gr00t_finetune.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--data_config", "baai_g1_dex3",
+                "--dataset-path", "/home/jiyuheng/Isaac-GR00T/demo_data/G1_Dex3_grasp_apple_place_basket_push_forward",
+                "--output-dir", "/home/jiyuheng/n1_ckpt/debug",
+                "--batch-size", "2",
+                "--max-steps", "5000",
+                "--save-steps", "500",
+                "--num-gpus", "1",
+                "--base-model-path", "/home/jiyuheng/groot_n1",
+                "--learning-rate", "0.0001",
+                "--weight-decay", "1e-05",
+                "--warmup-ratio", "0.05",
+                "--dataloader-num-workers", "8",
+                "--embodiment-tag", "new_embodiment",
+                "--no-tune-llm",
+                "--tune-visual",
+                "--tune-projector",
+                "--tune-diffusion-model",
+                "--no-resume"
+            ],
+            "env": {
+                "http_proxy": "http://192.168.0.3:1080",
+                "https_proxy": "http://192.168.0.3:1080",
+                "WANDB_MODE": "offline"
+            },
+            "cwd": "/home/jiyuheng/Isaac-GR00T"
+        }
+    ]
+}

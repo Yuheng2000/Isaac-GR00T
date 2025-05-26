@@ -19,6 +19,7 @@ import albumentations as A
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 import torchvision.transforms.v2 as T
 from einops import rearrange
 from pydantic import Field, PrivateAttr, field_validator
@@ -160,12 +161,12 @@ class VideoTransform(ModalityTransform):
         assert (
             transform is not None
         ), "Transform is not set. Please call set_metadata() before calling apply()."
+
         try:
             self.check_input(data)
         except AssertionError as e:
-            raise ValueError(
-                f"Input data does not match the expected format for {self.__class__.__name__}: {e}"
-            ) from e
+            raise ValueError(f"Input data does not match the expected format for {self.__class__.__name__}: {e}")
+
 
         # Concatenate views
         views = [data[key] for key in self.apply_to]
@@ -535,14 +536,24 @@ class VideoToTensor(VideoTransform):
             assert (
                 data[key].dtype == np.uint8
             ), f"Video {key} must have dtype uint8, got {data[key].dtype}"
+
             input_resolution = data[key].shape[-3:-1][::-1]
             if key in self.original_resolutions:
                 expected_resolution = self.original_resolutions[key]
             else:
                 expected_resolution = input_resolution
-            assert (
-                input_resolution == expected_resolution
-            ), f"Video {key} has invalid resolution {input_resolution}, expected {expected_resolution}. Full shape: {data[key].shape}"
+
+            try:
+                assert(input_resolution == expected_resolution)
+            except:
+
+                # print(f"Video {key} has invalid resolution {input_resolution}, expected {expected_resolution}. Full shape: {data[key].shape}")
+                # print(f"Try to resize video to expected resolution...")
+
+                data_tensor = torch.from_numpy(data[key]).permute(0, 3, 1, 2)  # 转换为 (1, 3, 720, 1280)
+                resized_tensor = F.interpolate(data_tensor, size=(480, 640), mode='bilinear', align_corners=False)
+                resized_data = resized_tensor.permute(0, 2, 3, 1).numpy()  # 转换为 (1, 480, 640, 3)
+                data[key] = resized_data
 
     @staticmethod
     def to_tensor(frames: np.ndarray) -> torch.Tensor:

@@ -29,8 +29,6 @@ from gr00t.data.schema import DatasetMetadata
 from gr00t.data.transform.base import ComposedModalityTransform
 from gr00t.model.gr00t_n1 import GR00T_N1
 
-COMPUTE_DTYPE = torch.bfloat16
-
 
 class BasePolicy(ABC):
     @abstractmethod
@@ -70,6 +68,8 @@ class Gr00tPolicy(BasePolicy):
         modality_transform: ComposedModalityTransform,
         denoising_steps: Optional[int] = None,
         device: Union[int, str] = "cuda" if torch.cuda.is_available() else "cpu",
+        use_asyn: bool = False,
+        sample_rate: int = 4,
     ):
         """
         Initialize the Gr00tPolicy.
@@ -92,6 +92,8 @@ class Gr00tPolicy(BasePolicy):
                 f"Model not found or avail in the huggingface hub. Loading from local path: {model_path}"
             )
 
+        self.use_asyn = use_asyn
+        self.sample_rate = sample_rate
         self._modality_config = modality_config
         self._modality_transform = modality_transform
         self._modality_transform.eval()  # set this to eval mode
@@ -181,8 +183,8 @@ class Gr00tPolicy(BasePolicy):
 
     def _get_action_from_normalized_input(self, normalized_input: Dict[str, Any]) -> torch.Tensor:
         # Set up autocast context if needed
-        with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=COMPUTE_DTYPE):
-            model_pred = self.model.get_action(normalized_input)
+        with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            model_pred = self.model.get_action(normalized_input, self.use_asyn, self.sample_rate)
 
         normalized_action = model_pred["action_pred"].float()
         return normalized_action
@@ -231,7 +233,7 @@ class Gr00tPolicy(BasePolicy):
         return True
 
     def _load_model(self, model_path):
-        model = GR00T_N1.from_pretrained(model_path, torch_dtype=COMPUTE_DTYPE)
+        model = GR00T_N1.from_pretrained(model_path)
         model.eval()  # Set model to eval mode
         model.to(device=self.device)  # type: ignore
 

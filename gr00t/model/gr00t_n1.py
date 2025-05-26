@@ -85,6 +85,7 @@ class GR00T_N1(PreTrainedModel):
         self.action_horizon = config.action_horizon
         self.action_dim = config.action_dim
         self.compute_dtype = config.compute_dtype
+        self.backbone_outputs = None
 
     def validate_inputs(self, inputs):
         # NOTE -- this should be handled internally by the model
@@ -171,10 +172,18 @@ class GR00T_N1(PreTrainedModel):
     def get_action(
         self,
         inputs: dict,
+        use_asyn: bool = False,
+        time_step: int = 0,
     ) -> BatchFeature:
         backbone_inputs, action_inputs = self.prepare_input(inputs)
         # Because the behavior of backbones remains the same for training and inference, we can use `forward` for backbones.
-        backbone_outputs = self.backbone(backbone_inputs)
+        if use_asyn: 
+            if time_step == 0:
+                self.backbone_outputs = self.backbone(backbone_inputs)
+            assert self.backbone_outputs is not None, "Backbone outputs should not be None"
+            backbone_outputs = self.backbone_outputs
+        else:
+            backbone_outputs = self.backbone(backbone_inputs)
         action_head_outputs = self.action_head.get_action(backbone_outputs, action_inputs)
         self.validate_data(action_head_outputs, backbone_outputs, is_training=False)
         return action_head_outputs

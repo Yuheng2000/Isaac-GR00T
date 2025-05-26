@@ -36,18 +36,21 @@ def get_embeddings(
     self,
     reproject_vision: bool,
     pixel_values=None,
+    cur_pixel_values=None,
     input_ids=None,
     attention_mask=None,
     visual_features=None,
     output_hidden_states=None,
     skip_llm=False,
-) -> torch.LongTensor:
+):
     assert self.img_context_token_id is not None
     assert pixel_values is not None
     if visual_features is not None:
         vit_embeds = visual_features
     else:
         vit_embeds = self.extract_feature(pixel_values)
+
+    cur_vit_embeds = self.extract_feature(cur_pixel_values)
 
     input_embeds = self.language_model.get_input_embeddings()(input_ids)
     B, N, C = input_embeds.shape
@@ -60,6 +63,7 @@ def get_embeddings(
     embeds_to_scatter = vit_embeds.reshape(-1, C).to(input_embeds.device, input_embeds.dtype)
     input_embeds[selected] = embeds_to_scatter
     input_embeds = input_embeds.reshape(B, N, C)
+    cur_vit_embeds = cur_vit_embeds.reshape(B, -1, C)
 
     # return hidden_states
     embeddings = self.language_model.forward(
@@ -73,7 +77,7 @@ def get_embeddings(
         embeddings = embeddings.reshape(B * N, C)
         embeddings[selected] = embeds_to_scatter
         embeddings = embeddings.reshape(B, N, C)
-    return embeddings
+    return embeddings, cur_vit_embeds
 
 
 class EagleBackbone(nn.Module):
@@ -108,7 +112,7 @@ class EagleBackbone(nn.Module):
         ):
             self.model.vision_model.vision_model.head = torch.nn.Identity()
 
-        # remove parts of the LLM
+        # remove parts of the LLM, choose 12th layer to get embed.
         self.model.language_model.lm_head = torch.nn.Identity()
         while len(self.model.language_model.model.layers) > select_layer:
             self.model.language_model.model.layers.pop(-1)
@@ -181,20 +185,23 @@ class EagleBackbone(nn.Module):
         # 0. Set frozen module to eval
         self.set_frozen_modules_to_eval_mode()
 
-        embeddings = get_embeddings(
+        embeddings, cur_embeddings = get_embeddings(
             self.model,
             self.reproject_vision,
             pixel_values=vl_input["pixel_values"],
+            cur_pixel_values=vl_input["cur_pixel_values"],
             input_ids=vl_input["input_ids"],
             attention_mask=vl_input["attention_mask"],
         )
 
         embeddings = self.linear(embeddings)
+        cur_embeddings = self.linear(cur_embeddings)
 
         attention_mask = vl_input["attention_mask"]
         return BatchFeature(
             data={
                 "backbone_features": embeddings,
                 "backbone_attention_mask": attention_mask,
+                "cur_vision_features": cur_embeddings,
             }
         )  # [B, T2, hidden_size]

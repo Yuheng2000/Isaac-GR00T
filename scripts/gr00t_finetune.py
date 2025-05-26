@@ -28,7 +28,6 @@ from gr00t.data.schema import EmbodimentTag
 from gr00t.experiment.data_config import DATA_CONFIG_MAP
 from gr00t.experiment.runner import TrainRunner
 from gr00t.model.gr00t_n1 import GR00T_N1
-from gr00t.utils.peft import get_lora_model
 
 
 @dataclass
@@ -87,15 +86,6 @@ class Config:
     warmup_ratio: float = 0.05
     """Ratio of total training steps used for warmup."""
 
-    lora_rank: int = 0
-    """Rank for the LORA model."""
-
-    lora_alpha: int = 16
-    """Alpha value for the LORA model."""
-
-    lora_dropout: float = 0.1
-    """Dropout rate for the LORA model."""
-
     dataloader_num_workers: int = 8
     """Number of workers for data loading."""
 
@@ -108,6 +98,10 @@ class Config:
 
     video_backend: str = "decord"
     """Video backend to use for training. [decord, torchvision_av]"""
+
+    use_future: bool = False
+
+    use_asyn: bool = True
 
 
 #####################################################################################
@@ -123,7 +117,7 @@ def main(config: Config):
     # 1.1 modality configs and transforms
     data_config_cls = DATA_CONFIG_MAP[config.data_config]
     modality_configs = data_config_cls.modality_config()
-    transforms = data_config_cls.transform()
+    transforms = data_config_cls.transform(use_future = config.use_future, use_asyn = config.use_asyn)
 
     # 1.2 data loader
     train_dataset = LeRobotSingleDataset(
@@ -131,7 +125,9 @@ def main(config: Config):
         modality_configs=modality_configs,
         transforms=transforms,
         embodiment_tag=embodiment_tag,  # This will override the dataset's embodiment tag to "new_embodiment"
-        video_backend=config.video_backend,
+        video_backend="torchvision_av",
+        use_future=config.use_future,
+        use_asyn=config.use_asyn,
     )
 
     # ------------ step 2: load model ------------
@@ -146,14 +142,6 @@ def main(config: Config):
     # Set the model's compute_dtype to bfloat16
     model.compute_dtype = "bfloat16"
     model.config.compute_dtype = "bfloat16"
-
-    if config.lora_rank > 0:
-        model = get_lora_model(
-            model,
-            rank=config.lora_rank,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-        )
 
     # 2.1 modify training args
     training_args = TrainingArguments(
@@ -227,7 +215,7 @@ if __name__ == "__main__":
 
     if config.num_gpus == 1:
         # Single GPU mode - set CUDA_VISIBLE_DEVICES=0
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         # Run the script normally
         main(config)
     else:
@@ -236,11 +224,16 @@ if __name__ == "__main__":
         else:
             # Multi-GPU mode - use torchrun
             script_path = Path(__file__).absolute()
-            # Remove any existing CUDA_VISIBLE_DEVICES from environment
-            if "CUDA_VISIBLE_DEVICES" in os.environ:
-                del os.environ["CUDA_VISIBLE_DEVICES"]
+
+            # # Remove any existing CUDA_VISIBLE_DEVICES from environment
+            # if "CUDA_VISIBLE_DEVICES" in os.environ:
+            #     del os.environ["CUDA_VISIBLE_DEVICES"]
 
             # Use subprocess.run instead of os.system
+            try:
+                print(f'os.environ["CUDA_VISIBLE_DEVICES"]:{os.environ["CUDA_VISIBLE_DEVICES"]}')
+            except:
+                pass
             cmd = [
                 "torchrun",
                 "--standalone",

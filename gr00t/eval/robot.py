@@ -19,6 +19,10 @@ from gr00t.data.dataset import ModalityConfig
 from gr00t.eval.service import BaseInferenceClient, BaseInferenceServer
 from gr00t.model.policy import BasePolicy
 
+import zmq
+
+from .service import TorchSerializer
+
 
 class RobotInferenceServer(BaseInferenceServer):
     """
@@ -27,6 +31,8 @@ class RobotInferenceServer(BaseInferenceServer):
 
     def __init__(self, model, host: str = "*", port: int = 5555):
         super().__init__(host, port)
+        self.sample_rate = 4
+        self.use_asyn = True
         self.register_endpoint("get_action", model.get_action)
         self.register_endpoint(
             "get_modality_config", model.get_modality_config, requires_input=False
@@ -36,6 +42,34 @@ class RobotInferenceServer(BaseInferenceServer):
     def start_server(policy: BasePolicy, port: int):
         server = RobotInferenceServer(policy, port=port)
         server.run()
+
+    def run(self):
+        addr = self.socket.getsockopt_string(zmq.LAST_ENDPOINT)
+        print(f"Server is ready and listening on {addr}")
+        time_step = 0
+        while self.running:
+            try:
+                message = self.socket.recv()
+                request = TorchSerializer.from_bytes(message)
+                endpoint = request.get("endpoint", "get_action")
+
+                if endpoint not in self._endpoints:
+                    raise ValueError(f"Unknown endpoint: {endpoint}")
+
+                handler = self._endpoints[endpoint]
+                result = (
+                    handler.handler(request.get("data", {}), self.use_asyn, time_step)
+                    if handler.requires_input
+                    else handler.handler()
+                )
+                self.socket.send(TorchSerializer.to_bytes(result))
+                time_step = (time_step + 1) % self.sample_rate
+            except Exception as e:
+                print(f"Error in server: {e}")
+                import traceback
+
+                print(traceback.format_exc())
+                self.socket.send(b"ERROR")
 
 
 class RobotInferenceClient(BaseInferenceClient, BasePolicy):

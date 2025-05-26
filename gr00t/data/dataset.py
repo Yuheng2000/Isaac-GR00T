@@ -96,6 +96,10 @@ class LeRobotSingleDataset(Dataset):
         video_backend: str = "decord",
         video_backend_kwargs: dict | None = None,
         transforms: ComposedModalityTransform | None = None,
+        action_chunk: int = 8,
+        use_future: bool = False,
+        use_asyn: bool = True,
+        sample_rate: int = 4,
     ):
         """
         Initialize the dataset.
@@ -113,6 +117,10 @@ class LeRobotSingleDataset(Dataset):
         if not Path(dataset_path).exists():
             raise FileNotFoundError(f"Dataset path {dataset_path} does not exist")
 
+        self._action_chunk = action_chunk
+        self.use_future = use_future
+        self.use_asyn = use_asyn
+        self.sample_rate = sample_rate
         self.modality_configs = modality_configs
         self.video_backend = video_backend
         self.video_backend_kwargs = video_backend_kwargs if video_backend_kwargs is not None else {}
@@ -516,10 +524,33 @@ class LeRobotSingleDataset(Dataset):
         data = {}
         # Get the data for all modalities
         self.curr_traj_data = self.get_trajectory_data(trajectory_id)
+        if self.use_asyn:
+            vision_index = base_index // self.sample_rate * self.sample_rate
+        else:
+            vision_index = base_index
+        if self.use_future:
+            trajectory_length = self.trajectory_lengths[trajectory_id]
+            future_index = min(np.random.randint(base_index + 1, base_index + self._action_chunk * 2), trajectory_length - self._action_chunk)
+        
         for modality in self.modality_keys:
             # Get the data corresponding to each key in the modality
-            for key in self.modality_keys[modality]:
-                data[key] = self.get_data_by_modality(trajectory_id, modality, key, base_index)
+            
+            # 'video', 'state', 'action'
+            if self.use_future and modality in ['video', 'state', 'action']:
+                for key in self.modality_keys[modality]:
+                    data[key] = np.concatenate([
+                        self.get_data_by_modality(trajectory_id, modality, key, base_index),
+                        self.get_data_by_modality(trajectory_id, modality, key, future_index)
+                    ], axis=0)
+            elif self.use_asyn and modality == 'video':
+                for key in self.modality_keys[modality]:
+                    data[key] = np.concatenate([
+                        self.get_data_by_modality(trajectory_id, modality, key, vision_index),
+                        self.get_data_by_modality(trajectory_id, modality, key, base_index)
+                    ], axis=0)
+            else:
+                for key in self.modality_keys[modality]:
+                    data[key] = self.get_data_by_modality(trajectory_id, modality, key, base_index)
         return data
 
     def get_trajectory_data(self, trajectory_id: int) -> pd.DataFrame:

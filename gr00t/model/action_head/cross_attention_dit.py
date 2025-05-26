@@ -29,6 +29,9 @@ from torch import nn
 
 
 class TimestepEncoder(nn.Module):
+    """
+    Given discrete input, TimestepEncoder encodes it into continuous embedding.
+    """
     def __init__(self, embedding_dim, compute_dtype=torch.float32):
         super().__init__()
         self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=1)
@@ -260,7 +263,7 @@ class DiT(ModelMixin, ConfigMixin):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_all_hidden_states: bool = False,
     ):
-        # Encode timesteps
+        # Encode timesteps 将离散的时间步编码为dim的维度: (bs,) -> (bs, dim)
         temb = self.timestep_encoder(timestep)
 
         # Process through transformer blocks - single pass through the blocks
@@ -269,7 +272,7 @@ class DiT(ModelMixin, ConfigMixin):
 
         all_hidden_states = [hidden_states]
 
-        # Process through transformer blocks
+        # Process through transformer blocks, 偶数block与vlm的输出进行cross-attn交互,其他block直接用state和action的hidden states进行self-attn。
         for idx, block in enumerate(self.transformer_blocks):
             if idx % 2 == 1 and self.config.interleave_self_attention:
                 hidden_states = block(
